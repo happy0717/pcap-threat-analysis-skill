@@ -194,18 +194,6 @@ Agent 会自动完成解析和分析。
 复制到当前工作目录下，然后告诉我继续。
 ```
 
-## 从源码构建
-
-```bash
-# 进入项目目录
-cd g:\bas_skill
-
-# Windows
-go build -o pcap-threat-analysis\parse_pcap_win.exe .\cmd\parse_pcap\
-
-# Linux
-GOOS=linux GOARCH=amd64 go build -o pcap-threat-analysis\parse_pcap_linux .\cmd\parse_pcap\
-```
 
 ## License
 
