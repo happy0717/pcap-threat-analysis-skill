@@ -7,7 +7,6 @@
 ```
 pcap-threat-analysis/
 ├── SKILL.md              # Skill 定义文件（AI Agent 使用）
-├── README.md             # 使用说明
 ├── parse_pcap_win.exe    # Windows amd64 解析工具
 └── parse_pcap_linux      # Linux amd64 解析工具
 ```
