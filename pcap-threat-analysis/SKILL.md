@@ -103,14 +103,61 @@ Skill 附带两个平台的 `parse_pcap` 二进制文件：
       "payloads": [
         {
           "direction": "request",
+          "section": "requestHeader",
           "hex": "474554202f...",
           "text": "GET /admin/exec?cmd=whoami HTTP/1.1\r\n..."
+        },
+        {
+          "direction": "request",
+          "section": "requestBody",
+          "hex": "636d643d77686f616d69",
+          "text": "cmd=whoami"
+        },
+        {
+          "direction": "response",
+          "section": "responseHeader",
+          "hex": "485454502f312e3120323030...",
+          "text": "HTTP/1.1 200 OK\r\n..."
+        },
+        {
+          "direction": "response",
+          "section": "responseBody",
+          "hex": "726f6f74",
+          "text": "root"
         }
       ]
     }
   ]
 }
 ```
+
+**字段说明：**
+
+- `section`：HTTP 载荷分段标识（`requestHeader`/`requestBody`/`responseHeader`/`responseBody`），仅在 HTTP 流中存在；非 HTTP 流按原始 TCP 包顺序输出
+- `no_separator`：布尔标记，当 HTTP 头部未以 `\r\n\r\n` 结束时为 true
+- `seq_gap`：同方向前后两个 TCP 段之间的序列号缺失字节数
+- `truncated` / `truncated_len` / `declared_len`：抓包截断标记
+- `tcp_handshake`：`complete` / `incomplete` / `n/a`
+- `tcp_teardown`：`complete` / `incomplete` / `n/a`
+
+**problems 可能的取值：**
+
+| 取值 | 含义 |
+|------|------|
+| `缺少eth层` | pcap 缺少以太网层 |
+| `非TCP/UDP流量` | IP 层非 TCP/UDP |
+| `存在回环流量` | 存在回环地址流量 |
+| `MTU大于1514` | 存在超大包 |
+| `不完整的握手` | TCP 三次握手不完整 |
+| `不完整的挥手` | TCP 四次挥手不完整 |
+| `N个包抓包截断/丢包` | 存在抓包截断 |
+| `N处seq丢包` | 同方向 TCP 序列号间隙 |
+| `pcap不完整 tcp连接未关闭` | 握手完整但无 FIN/RST |
+| `pcap不完整 缺少tcp握手` | 无 SYN 包 |
+| `流量乱序` | 请求载荷出现在响应载荷之后 |
+| `HTTP头部行分隔未使用CRLF` | HTTP 头部行使用 LF 而非 CRLF |
+| `HTTP头部未以CRLFCRLF结束` | HTTP 头部缺少 `\r\n\r\n` 终止符 |
+| `HTTP协议有问题(缺少Content-Length)` | 请求有 body 但头部缺少 Content-Length |
 
 ### 步骤 4：逐流安全分析
 
