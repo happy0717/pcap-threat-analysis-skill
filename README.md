@@ -35,7 +35,8 @@ pcap-threat-analysis/
    - 提取每条流（四元组：源IP、源端口、目的IP、目的端口、传输协议）
    - 识别应用层协议：HTTP、TLS、DNS、SSH、SMB、DCERPC、PostgreSQL、Telnet、MSSQL、Redis、MySQL、WebSocket
    - 提取每条流的 payload（HEX + 可读文本）
-   - 检查流问题：TCP 握手/挥手完整性、MTU、回环流量等
+   - HTTP 流自动重组跨包载荷，按 `requestHeader` / `requestBody` / `responseHeader` / `responseBody` 四段拆分
+   - 检查流问题：TCP 握手/挥手完整性、MTU、回环流量、SEQ 丢包、抓包截断、流量乱序、HTTP 协议异常等
 2. **AI 分析阶段**：模型作为安全工程师逐流审查，覆盖 40+ 种威胁类型
 
 ## 快速开始
@@ -119,8 +120,27 @@ Agent 会自动完成解析和分析。
       "payloads": [
         {
           "direction": "request",
+          "section": "requestHeader",
           "hex": "474554202f20485454502f312e31...",
           "text": "GET / HTTP/1.1\r\nHost: example.org\r\n..."
+        },
+        {
+          "direction": "request",
+          "section": "requestBody",
+          "hex": "636d643d77686f616d69",
+          "text": "cmd=whoami"
+        },
+        {
+          "direction": "response",
+          "section": "responseHeader",
+          "hex": "485454502f312e3120323030...",
+          "text": "HTTP/1.1 200 OK\r\n..."
+        },
+        {
+          "direction": "response",
+          "section": "responseBody",
+          "hex": "726f6f74",
+          "text": "root"
         }
       ],
       "problems": ["不完整的挥手"]
@@ -128,6 +148,20 @@ Agent 会自动完成解析和分析。
   ]
 }
 ```
+
+**payload 字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `direction` | 载荷方向：`request` / `response` |
+| `section` | HTTP 载荷分段标识（`requestHeader`/`requestBody`/`responseHeader`/`responseBody`），仅 HTTP 流存在；非 HTTP 流按原始 TCP 包顺序输出 |
+| `hex` | 载荷的十六进制编码 |
+| `text` | 载荷的可读文本（非可打印字符以 `.` 替代） |
+| `no_separator` | 布尔标记，HTTP 头部未以 `\r\n\r\n` 结束时为 true |
+| `seq_gap` | 同方向前后两个 TCP 段之间的序列号缺失字节数 |
+| `truncated` / `truncated_len` / `declared_len` | 抓包截断标记 |
+
+**tcp_handshake / tcp_teardown 取值：** `complete` / `incomplete` / `n/a`
 
 ## 支持的协议检测
 
@@ -176,10 +210,19 @@ Agent 会自动完成解析和分析。
 
 ## 流级问题检测
 
-- TCP 三次握手不完整（SYN → SYN+ACK → ACK）
-- TCP 四次挥手不完整（FIN+ACK → ACK → FIN+ACK → ACK）
-- MTU 超过 1514 字节
-- RST 中断
+| 问题提示 | 说明 |
+|----------|------|
+| `不完整的握手` | TCP 三次握手不完整（SYN → SYN+ACK → ACK） |
+| `不完整的挥手` | TCP 四次挥手不完整（FIN+ACK → ACK → FIN+ACK → ACK） |
+| `MTU大于1514` | 存在超过 1514 字节的超大包 |
+| `N个包抓包截断/丢包` | IP Length 声明的长度大于实际捕获字节数 |
+| `N处seq丢包` | 同方向前后 TCP 段序列号存在间隙 |
+| `pcap不完整 tcp连接未关闭` | 握手完整但无 FIN/RST，抓包截止时连接仍在进行 |
+| `pcap不完整 缺少tcp握手` | 无 SYN 包，未捕获到握手 |
+| `流量乱序` | 请求载荷出现在响应载荷之后（请求体滞后于响应到达） |
+| `HTTP头部行分隔未使用CRLF` | HTTP 头部各字段行使用 LF 而非 CRLF 分隔 |
+| `HTTP头部未以CRLFCRLF结束` | HTTP 头部缺少 `\r\n\r\n` 终止符（头部与体部之间无空行分隔） |
+| `HTTP协议有问题(缺少Content-Length)` | 请求有 body 但头部缺少 Content-Length（仅研判请求方向） |
 
 ## 安装到 AI Agent
 
