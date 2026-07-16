@@ -237,6 +237,13 @@ Agent 会自动完成解析和分析。
 复制到当前工作目录下，然后告诉我继续。
 ```
 
+## 使用
+1.下载 https://github.com/happy0717/pcap-threat-analysis-skill/tree/main/pcap-threat-analysis 文件夹中的skill内容(包括两个可执行文件)，根据Agent需要直接放在工作区或者打包成zip上传到Agent工具。
+2.提示词：
+仅分析pcap：```帮我使用 pcap-threat-analysis skill 分析一下这个 pcap```
+对流量检测设备告警进行研判：```帮我使用 pcap-threat-analysis skill 分析一下这个 pcap 是否符合告警"{告警名称}", 判断依据是什么？，可以参考"{规则描述}"进行分析和解释。```
+注意：改skill主要用途是将pcap转成模型可读的文本数据，如果仅对流量检测设备的告警研判正常Agent可以支持文本格式的流量日志、图片OCR等，这种情况可以不用使用该SKILL，直接使用提示词```分析一下这个流量是否符合告警"{告警名称}", 判断依据是什么？，可以参考"{规则描述}"进行分析和解释。```
+
 
 ## License
 
