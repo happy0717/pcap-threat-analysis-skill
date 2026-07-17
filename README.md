@@ -33,6 +33,7 @@ pcap-threat-analysis/
 
 1. **自动解析阶段**：`parse_pcap` 工具读取 pcap，输出结构化 JSON
    - 提取每条流（四元组：源IP、源端口、目的IP、目的端口、传输协议）
+   - 识别传输层协议：TCP、UDP、ICMP、ICMPv6、ARP、IGMP（非 TCP/UDP 协议同样提取为独立 flow 并输出 hex 载荷）
    - 识别应用层协议：HTTP、TLS、DNS、SSH、SMB、DCERPC、PostgreSQL、Telnet、MSSQL、Redis、MySQL、WebSocket
    - 提取每条流的 payload（HEX + 可读文本）
    - HTTP 流自动重组跨包载荷，按 `requestHeader` / `requestBody` / `responseHeader` / `responseBody` 四段拆分
@@ -165,7 +166,22 @@ Agent 会自动完成解析和分析。
 
 ## 支持的协议检测
 
-所有协议检测均为**纯内容/结构特征识别**，不依赖端口号：
+### 传输层协议（流量解析）
+
+| 协议 | 处理方式 |
+|------|----------|
+| TCP | 完整解析：握手/挥手、SEQ 丢包、payloadLen、HTTP 重组等 |
+| UDP | 解析 payload、四元组分流 |
+| ICMP | 解析 ICMPv4 层数据，输出 hex（type/code/checksum/id/seq） |
+| ICMPv6 | 解析 ICMPv6 层数据，输出 hex |
+| ARP | 解析 ARP 层数据（请求/响应、源/目标 MAC+IP），输出 hex |
+| IGMP | 解析 IGMP 层数据，输出 hex |
+
+> 非 TCP/UDP 协议（ICMP/ICMPv6/ARP/IGMP）同样会被提取为独立 flow，输出 `transport_protocol` 和 `app_protocols` 字段；其 `app_protocols` 值为协议名本身（如 `["ICMP"]`）。
+
+### 应用层协议识别（基于内容特征）
+
+所有应用层协议检测均为**纯内容/结构特征识别**，不依赖端口号：
 
 | 协议 | 检测特征 |
 |------|----------|
@@ -247,7 +263,6 @@ Agent 会自动完成解析和分析。
 对流量检测设备告警进行研判：```帮我使用 pcap-threat-analysis skill 分析一下这个 pcap 是否符合告警"{告警名称}", 判断依据是什么？，可以参考"{规则描述}"进行分析和解释。```
 
 注意：该skill主要用途是将pcap转成模型可读的文本数据，如果仅对流量检测设备的告警研判，正常Agent可以支持传入文本格式的流量日志、图片OCR等，这种情况可以不用使用该SKILL，直接使用提示词```分析一下这个流量是否符合告警"{告警名称}", 判断依据是什么？，可以参考"{规则描述}"进行分析和解释。```
-
 
 ## License
 
