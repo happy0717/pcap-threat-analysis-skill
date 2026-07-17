@@ -137,8 +137,10 @@ Skill 附带两个平台的 `parse_pcap` 二进制文件：
 - `no_separator`：布尔标记，当 HTTP 头部未以 `\r\n\r\n` 结束时为 true
 - `seq_gap`：同方向前后两个 TCP 段之间的序列号缺失字节数
 - `truncated` / `truncated_len` / `declared_len`：抓包截断标记
-- `tcp_handshake`：`complete` / `incomplete` / `n/a`
-- `tcp_teardown`：`complete` / `incomplete` / `n/a`
+- `tcp_handshake`：`complete` / `incomplete` / `n/a`（仅 TCP 流）
+- `tcp_teardown`：`complete` / `incomplete` / `n/a`（仅 TCP 流）
+
+**支持的传输层协议：** TCP、UDP、ICMP、ICMPv6、ARP、IGMP。非 TCP/UDP 协议同样会被提取为独立 flow，`transport_protocol` 字段值为对应协议名（如 `ICMP`、`ARP`），`app_protocols` 值为协议名本身，payload 为该协议层的原始 hex 数据。
 
 **problems 可能的取值：**
 
