@@ -40,6 +40,7 @@ pcap-threat-analysis/
    - 检查流问题：TCP 握手/挥手完整性、MTU、回环流量、SEQ 丢包、抓包截断、流量乱序、HTTP 协议异常等
 2. **AI 分析阶段**：模型作为安全工程师逐流审查，覆盖 40+ 种威胁类型
 
+
 ## 快速开始
 
 ### 前置要求
@@ -123,7 +124,7 @@ Agent 会自动完成解析和分析。
           "direction": "request",
           "section": "requestHeader",
           "hex": "474554202f20485454502f312e31...",
-          "text": "GET / HTTP/1.1\r\nHost: example.org\r\n..."
+          "text": "GET / HTTP/1.1\r\nHost: happy0717.org\r\n..."
         },
         {
           "direction": "request",
@@ -221,7 +222,6 @@ Agent 会自动完成解析和分析。
 - 文件过小 / 无法读取
 - 不是 tcpdump/pcap/pcapng 格式（魔数校验）
 - 缺少 eth 层
-- 非 TCP/UDP 流量
 - 存在回环流量（127.0.0.0/8, ::1/128, 0.0.0.0/8）
 
 ## 流级问题检测
@@ -263,6 +263,132 @@ Agent 会自动完成解析和分析。
 对流量检测设备告警进行研判：```帮我使用 pcap-threat-analysis skill 分析一下这个 pcap 是否符合告警"{告警名称}", 判断依据是什么？，可以参考"{规则描述}"进行分析和解释。```
 
 注意：该skill主要用途是将pcap转成模型可读的文本数据，如果仅对流量检测设备的告警研判，正常Agent可以支持传入文本格式的流量日志、图片OCR等，这种情况可以不用使用该SKILL，直接使用提示词```分析一下这个流量是否符合告警"{告警名称}", 判断依据是什么？，可以参考"{规则描述}"进行分析和解释。```
+
+## parse_pcap 工具框架与结构原理
+
+(parse_pcap主要作用：将pcap解析为模型可读的json内容并分析pcap流量是否存在问题)
+
+### 技术栈
+
+| 组件 | 选型 |
+|------|------|
+| 语言 | Go 1.24 |
+| 核心依赖 | `github.com/gopacket/gopacket` v1.6.1（pcap 解析 + 协议解码） |
+| 编译目标 | Windows amd64 / Linux amd64 静态二进制，零运行时依赖 |
+
+
+### 处理流水线
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ParsePcap(path)                                            │
+│                                                             │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ 1. 目录递归扫描 (filepath.WalkDir)                     │  │
+│  │    → 收集所有 .pcap/.cap/.pcapng 文件路径               │  │
+│  └────────────────────────┬──────────────────────────────┘  │
+│                           ▼                                  │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ 2. Worker Pool 并发处理 (最多 8 个 goroutine)           │  │
+│  │    每个 worker 独立调用 analyzePcapFile()               │  │
+│  │    panic recovery 保护，单文件崩溃不影响整体             │  │
+│  └────────────────────────┬──────────────────────────────┘  │
+│                           ▼                                  │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ 3. analyzePcapFile(pcapPath) — 单文件解析               │  │
+│  │    ├── ReadPcap()        读取全部 packet               │  │
+│  │    ├── checkFileProblems() 文件级问题检测               │  │
+│  │    ├── extractFlows()     按四元组分组为 flow            │  │
+│  │    └── buildFlowAnalysis() 逐流构建分析结果             │  │
+│  └────────────────────────┬──────────────────────────────┘  │
+│                           ▼                                  │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ 4. 结果收集 + JSON 输出                                  │  │
+│  │    重名文件自动加序号 → writePcapJSONNamed()            │  │
+│  │    按文件名排序 → addSummaryItem() → writeSummary()     │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 核心模块详解
+
+#### 1. 读取层 `reader.go`
+
+`ReadPcap(filename)` 使用 `pcapgo.Reader` 循环读取每个 packet，调用 `gopacket.NewPacket()` 同步解码为带层信息的 `gopacket.Packet`。手动循环（而非 `PacketSource.Packets()` channel）避免了某些异常 pcap 上的 goroutine 死锁问题。
+
+#### 2. 流分组 `extractFlows` + `canonicalFlowKey`
+
+```
+原始 packets → 按 (srcIP:srcPort, dstIP:dstPort, transport) 归一化 → flow
+```
+
+- `extractFourTuple`：从每个 packet 提取五元组（源IP、源端口、目的IP、目的端口、传输协议）。支持 TCP/UDP/ICMP/ICMPv6/ARP/IGMP 六种传输协议
+- `canonicalFlowKey`：将两端点排序后拼接为双向流 key（A→B 和 B→A 归为同一 flow）
+- `buildFlowData`：将同一 flow 的 packets 转换为 `flowPacket` 列表，通过 `determineFlowDirection` 判定请求/响应方向（TCP 优先以 SYN 包方向为准）
+
+#### 3. 协议识别 `detectAppProtocols`
+
+对每个 flow 的 payload 依次尝试 12 种应用层协议探测器（HTTP/TLS/SSH/DNS/WebSocket/MySQL/SMB/DCERPC/PostgreSQL/Telnet/MSSQL/Redis）。非 TCP/UDP 流直接返回传输协议名本身。所有探测器均为**纯内容/结构特征匹配**，不依赖端口号。
+
+#### 4. 载荷提取与重组
+
+| 场景 | 函数 | 说明 |
+|------|------|------|
+| 非 HTTP 流 | `buildRawPayloads` | 按原始 TCP 包顺序逐包输出 hex |
+| HTTP 流 | `buildHTTPPayloads` + `splitHTTPBuffer` | 将同方向 packet 拼接为缓冲区，按 `\r\n\r\n` 或 `\n\n` 分隔 header/body，按 Content-Length 切分 body |
+| 非 TCP/UDP 流 | `extractLayerPayload` | 使用 `layer.LayerContents()` 提取协议层原始字节 |
+
+#### 5. 问题检测
+
+| 层级 | 函数 | 检测内容 |
+|------|------|----------|
+| 文件级 | `checkFileProblems` + `checkFileProblemsFromPackets` | 魔数校验、eth 层、回环流量、MTU |
+| 流级-TCP | `checkTCPHandshake` / `checkTCPTeardown` | 三次握手、四次挥手完整性 |
+| 流级-通用 | `checkFlowProblems` | MTU、截断、SEQ 间隙 |
+| 流级-HTTP | `checkHTTPProtocol` | CRLF 分隔、头部终止符、Content-Length |
+| 流级-顺序 | `checkTrafficOrder` | 请求载荷出现在响应之后 |
+
+#### 6. 并发模型
+
+```
+                    jobs chan (buffered: N)
+main goroutine ──────────────────────────►  worker 1 ──► results chan
+                  │                        worker 2 ──►     (buffered: N)
+                  │                        ...
+                  │                        worker 8 ──►
+                  close(jobs)
+                                               │
+                  wg.Wait() ──► close(results) │
+                                               ▼
+                  主 goroutine 收集结果，写 JSON，更新 summary
+```
+
+- Worker 数量 = `min(NumCPU, 8, 文件数)`，避免过多 goroutine 竞争
+- 每个 worker 内部对每个文件包裹 `recover()`，单文件 panic 不会崩溃整个程序
+- 结果按文件名排序后写入 summary，保证输出顺序稳定
+
+### 数据结构关系
+
+```
+PcapAnalysis (单文件结果)
+├── PcapName, TotalPackets, TotalFlows
+├── FileProblems []string
+└── Flows []FlowAnalysis
+                ├── FlowID, SrcIP, SrcPort, DstIP, DstPort
+                ├── TransportProto (TCP/UDP/ICMP/ARP/...)
+                ├── AppProtocols []string
+                ├── TCPHandshake, TCPTeardown
+                ├── Payloads []PayloadRecord
+                │           ├── Direction (request/response)
+                │           ├── Section (requestHeader/requestBody/...)
+                │           ├── Hex, Text
+                │           └── NoSeparator, SeqGap, Truncated...
+                └── Problems []string
+
+PcapSummary (汇总)
+├── SourcePath, TotalPcap, PcapWithProblem, PureTLSCount
+└── Items []{ PcapName, FileProblems, Protocols, OnlyTLS }
+```
 
 ## License
 
